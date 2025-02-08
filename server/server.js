@@ -27,42 +27,74 @@ const twitterClient = new TwitterApi({
   accessSecret: process.env.TWITTER_ACCESS_SECRET,
 });
 
+
 app.get('/api/fetch-tweets', async (req, res) => {
   try {
     const tweets = await twitterClient.v2.search('health nutrition');
     res.json(tweets.data);
   } catch (error) {
+    console.error('Twitter API error:', error);
     res.status(500).json({ error: 'Failed to fetch tweets' });
   }
 });
 
+
 // OpenAI API
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+// const openai = new OpenAI({
+//   apiKey: process.env.OPENAI_API_KEY,
+// });
+
+// app.post('/api/extract-claims', async (req, res) => {
+//   const { text } = req.body;
+//   try {
+//     const response = await openai.chat.completions.create({
+//       model: 'gpt-3.5-turbo',
+//       messages: [
+//         { role: 'system', content: 'Extract health-related claims from the following text:' },
+//         { role: 'user', content: text },
+//       ],
+//       max_tokens: 100,
+//     });
+//     res.json({ claims: response.choices[0].message.content });
+//   } catch (error) {
+//     console.error('Error extracting claims:', error);
+//     res.status(500).json({ error: error.message, stack: error.stack });
+//   }
+// });
 
 app.post('/api/extract-claims', async (req, res) => {
   const { text } = req.body;
   try {
-    const response = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
-      messages: [
-        { role: 'system', content: 'Extract health-related claims from the following text:' },
-        { role: 'user', content: text },
-      ],
-      max_tokens: 100,
+    // Construct a prompt for the model
+    const prompt = `Extract health-related claims from the following text:\n${text}`;
+
+    // Call the Hugging Face Inference API
+    const response = await axios({
+      method: 'POST',
+      url: 'https://api-inference.huggingface.co/models/google/flan-t5-base',
+      headers: { 
+        "Authorization": `Bearer ${process.env.HUGGINGFACE_API_KEY}` 
+      },
+      data: {
+        inputs: prompt,
+        parameters: { max_new_tokens: 100 }  // Adjust as needed
+      }
     });
-    res.json({ claims: response.choices[0].message.content });
+
+    // The response is typically an array; extract the generated text
+    const generatedText = response.data[0]?.generated_text;
+    res.json({ claims: generatedText });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to extract claims' });
+    console.error('Hugging Face API error:', error);
+    res.status(500).json({ error: 'Failed to extract claims', details: error.message });
   }
 });
 
 // PubMed API
-app.get('api/verify-claims', async (req, res) => {
+app.get('/api/verify-claims', async (req, res) => {
   const { claims } = req.query;
   try {
-    const response = await axios.get(`https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${claim}`);
+    const response = await axios.get(`https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(claims)}`);
     res.json(response.data)
   } catch (error) {
     res.status(500).json({ error: 'Failed to verify claims' });
