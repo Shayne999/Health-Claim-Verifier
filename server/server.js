@@ -77,7 +77,7 @@ app.post('/api/extract-claims', async (req, res) => {
       },
       data: {
         inputs: prompt,
-        parameters: { max_new_tokens: 100 }  // Adjust as needed
+        parameters: { max_new_tokens: 100 }
       }
     });
 
