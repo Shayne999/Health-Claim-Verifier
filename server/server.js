@@ -7,6 +7,7 @@ const { ChatCompletion } = OpenAI;
 
 const axios = require('axios');
 
+
 const { TwitterApi } = require('twitter-api-v2');
 // const { Configuration, OpenAIApi } = require('openai');
 
@@ -90,17 +91,27 @@ app.post('/api/extract-claims', async (req, res) => {
   }
 });
 
-// PubMed API
+// Europe PMC API
 app.get('/api/verify-claims', async (req, res) => {
   const { claims } = req.query;
+
+  if (!claims) {
+    return res.status(400).json({ error: 'Missing "claims" query parameter' });
+  }
+
   try {
-    const response = await axios.get(`https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(claims)}`);
-    res.json(response.data)
+    const response = await axios.get(`https://www.ebi.ac.uk/europepmc/webservices/rest/search`, {
+      params: { query: claims, format: 'json' }
+    });
+    res.json(response.data);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to verify claims' });
+    console.error('Europe PMC API error:', error.response ? error.response.data : error.message);
+    res.status(500).json({ 
+      error: 'Failed to verify claims', 
+      details: error.response ? error.response.data : error.message 
+    });
   }
 });
-
 
 // MongoDB Connection
 mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
