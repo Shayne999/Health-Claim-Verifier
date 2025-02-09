@@ -19,7 +19,8 @@ function App() {
     setSearchLoading(true);
     try {
       const response = await axios.get('http://localhost:5000/api/fetch-tweets');
-      setTweets(response.data);
+      console.log('API Response:', response.data);
+      setTweets(response.data.data || []);
     } catch (error) {
       console.error('Failed to fetch tweets', error);
     } finally {
@@ -65,7 +66,7 @@ function App() {
           {searchLoading ? 'Fetching Tweets...' : 'Fetch Health Tweets'}
         </Button>
         <div className="tweets-grid">
-          {tweets.map((tweet, index) => (
+          {Array.isArray && tweets.map((tweet, index) => (
             <Card key={index} className="card">
               <CardContent>
                 <p>{tweet.text}</p>
