@@ -43,78 +43,132 @@ app.get('/api/fetch-tweets', async (req, res) => {
 });
 
 
-// OpenAI API
-// const openai = new OpenAI({
-//   apiKey: process.env.OPENAI_API_KEY,
-// });
-
 // app.post('/api/extract-claims', async (req, res) => {
 //   const { text } = req.body;
 //   try {
-//     const response = await openai.chat.completions.create({
-//       model: 'gpt-3.5-turbo',
-//       messages: [
-//         { role: 'system', content: 'Extract health-related claims from the following text:' },
-//         { role: 'user', content: text },
-//       ],
-//       max_tokens: 100,
+//     // Construct a prompt for the model
+//     const prompt = `Extract health-related claims from the following text:\n${text}`;
+
+//     // Call the Hugging Face Inference API
+//     const response = await axios({
+//       method: 'POST',
+//       url: 'https://api-inference.huggingface.co/models/google/flan-t5-base',
+//       headers: { 
+//         "Authorization": `Bearer ${process.env.HUGGINGFACE_API_KEY}` 
+//       },
+//       data: {
+//         inputs: prompt,
+//         parameters: { max_new_tokens: 100 }
+//       }
 //     });
-//     res.json({ claims: response.choices[0].message.content });
+
+//     // The response is typically an array; extract the generated text
+//     const generatedText = response.data[0]?.generated_text;
+//     res.json({ claims: generatedText });
 //   } catch (error) {
-//     console.error('Error extracting claims:', error);
-//     res.status(500).json({ error: error.message, stack: error.stack });
+//     console.error('Hugging Face API error:', error);
+//     res.status(500).json({ error: 'Failed to extract claims', details: error.message });
 //   }
 // });
 
-app.post('/api/extract-claims', async (req, res) => {
+// // Europe PMC API
+// app.get('/api/verify-claims', async (req, res) => {
+//   const { claims } = req.query;
+
+//   if (!claims) {
+//     return res.status(400).json({ error: 'Missing "claims" query parameter' });
+//   }
+
+//   try {
+//     const response = await axios.get(`https://www.ebi.ac.uk/europepmc/webservices/rest/search`, {
+//       params: { query: claims, format: 'json' }
+//     });
+//     res.json(response.data);
+//   } catch (error) {
+//     console.error('Europe PMC API error:', error.response ? error.response.data : error.message);
+//     res.status(500).json({ 
+//       error: 'Failed to verify claims', 
+//       details: error.response ? error.response.data : error.message 
+//     });
+//   }
+// });
+
+// Extract and verify claims in a single endpoint
+app.post("/api/extract-and-verify", async (req, res) => {
   const { text } = req.body;
-  try {
-    // Construct a prompt for the model
-    const prompt = `Extract health-related claims from the following text:\n${text}`;
-
-    // Call the Hugging Face Inference API
-    const response = await axios({
-      method: 'POST',
-      url: 'https://api-inference.huggingface.co/models/google/flan-t5-base',
-      headers: { 
-        "Authorization": `Bearer ${process.env.HUGGINGFACE_API_KEY}` 
-      },
-      data: {
-        inputs: prompt,
-        parameters: { max_new_tokens: 100 }
-      }
-    });
-
-    // The response is typically an array; extract the generated text
-    const generatedText = response.data[0]?.generated_text;
-    res.json({ claims: generatedText });
-  } catch (error) {
-    console.error('Hugging Face API error:', error);
-    res.status(500).json({ error: 'Failed to extract claims', details: error.message });
-  }
-});
-
-// Europe PMC API
-app.get('/api/verify-claims', async (req, res) => {
-  const { claims } = req.query;
-
-  if (!claims) {
-    return res.status(400).json({ error: 'Missing "claims" query parameter' });
+  if (!text) {
+    return res.status(400).json({ error: 'Missing "text" in request body' });
   }
 
   try {
-    const response = await axios.get(`https://www.ebi.ac.uk/europepmc/webservices/rest/search`, {
-      params: { query: claims, format: 'json' }
-    });
-    res.json(response.data);
+    // **Step 1: Extract Claims using Hugging Face**
+    const extractionPrompt = `Extract and list health-related claims from the following text:\n${text}`;
+    
+    const extractResponse = await axios.post(
+      "https://api-inference.huggingface.co/models/google/flan-t5-base",
+      { inputs: extractionPrompt, parameters: { max_new_tokens: 100 } },
+      { headers: { Authorization: `Bearer ${process.env.HUGGINGFACE_API_KEY}` } }
+    );
+
+    const extractedClaims = extractResponse.data[0]?.generated_text?.split("\n") || [];
+    
+    if (!extractedClaims.length) {
+      return res.status(400).json({ error: "No claims extracted" });
+    }
+
+    console.log("Extracted Claims:", extractedClaims);
+
+    // **Step 2: Retrieve Relevant Papers from Europe PMC**
+    const verificationResults = await Promise.all(
+      extractedClaims.map(async (claim) => {
+        try {
+          const pmcResponse = await axios.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            { params: { query: claim, format: "json" } }
+          );
+
+          const papers = pmcResponse.data.resultList?.result || [];
+          const abstracts = papers
+            .map((paper) => paper.abstractText)
+            .filter((abstract) => abstract) // Remove undefined abstracts
+            .slice(0, 5) // Limit number of abstracts to avoid token limit
+
+          console.log(`Retrieved ${abstracts.length} abstracts for claim: "${claim}"`);
+
+          // **Step 3: Use Hugging Face to Verify Claim with Retrieved Evidence**
+          const verificationPrompt = `
+          Claim: ${claim}
+          Based on the following scientific abstracts, determine if the claim is supported, refuted, or inconclusive.
+          
+          Scientific Evidence:
+          ${abstracts.join("\n\n")}
+
+          Return only "Supported", "Refuted", or "Inconclusive".
+          `;
+
+          const verifyResponse = await axios.post(
+            "https://api-inference.huggingface.co/models/google/flan-t5-base",
+            { inputs: verificationPrompt, parameters: { max_new_tokens: 5 } },
+            { headers: { Authorization: `Bearer ${process.env.HUGGINGFACE_API_KEY}` } }
+          );
+
+          const verificationResult = verifyResponse.data[0]?.generated_text?.trim() || "Inconclusive";
+
+          return { claim, verification: verificationResult };
+        } catch (error) {
+          console.error(`Error verifying claim: "${claim}"`, error.message);
+          return { claim, verification: "Error retrieving verification" };
+        }
+      })
+    );
+
+    res.json({ extractedClaims, verificationResults });
   } catch (error) {
-    console.error('Europe PMC API error:', error.response ? error.response.data : error.message);
-    res.status(500).json({ 
-      error: 'Failed to verify claims', 
-      details: error.response ? error.response.data : error.message 
-    });
+    console.error("Error processing claims:", error);
+    res.status(500).json({ error: "Internal Server Error", details: error.message });
   }
 });
+
 
 // MongoDB Connection
 mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
